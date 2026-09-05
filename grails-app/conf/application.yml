@@ -1,0 +1,44 @@
+info:
+  app:
+    name: '@info.app.name@'
+    version: '@info.app.version@'
+    grailsVersion: '@info.app.grailsVersion@'
+grails:
+  mime:
+    types:
+      json:
+      - application/json
+      - text/json
+      all: '*/*'
+  codegen:
+    defaultPackage: carolina
+  profile: rest-api
+# GORM/Hibernate must not touch the shared catalog. H2 is Grails-only.
+dataSource:
+  pooled: true
+  jmxExport: true
+  driverClassName: org.h2.Driver
+  username: sa
+  password: ''
+  dbCreate: none
+  url: jdbc:h2:mem:grails_not_catalog;LOCK_TIMEOUT=10000;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+hibernate:
+  hbm2ddl:
+    auto: none
+  cache:
+    queries: false
+    use_second_level_cache: false
+    use_query_cache: false
+server:
+  port: ${PORT:4020}
+  address: "::"
+environments:
+  development:
+    dataSource:
+      dbCreate: none
+  test:
+    dataSource:
+      dbCreate: none
+  production:
+    dataSource:
+      dbCreate: none
