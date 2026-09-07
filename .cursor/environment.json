@@ -1,0 +1,14 @@
+{
+  "name": "carolina-codes-grails",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "install": "./gradlew --no-daemon classes",
+  "ports": [
+    {
+      "name": "api",
+      "port": 4020
+    }
+  ]
+}
