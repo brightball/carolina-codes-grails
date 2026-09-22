@@ -14,3 +14,5 @@ Postgres `v1_*` views live in the CMS database. Handler/unit tests that use a fa
 - `PUBLIC_BASE_URL` / `PORT` as in the README
 
 Do not query Ash tables. Do not fold this tree into the CMS git remote. Contract: CMS `priv/api/openapi.yaml` + `priv/api/AGENTS.md`.
+
+Requires JDK 27 (`JAVA_HOME` / `mise` java@27.0.0). Quality gates (also pre-commit hooks and parallel Gitea jobs): `./gradlew --no-daemon test`, `spotbugsMain`, `dependencyAudit`, `codenarcMain`, and `gitleaks detect --source . --verbose`. Install hooks with `pre-commit install`. `dependencyAudit` writes a CycloneDX BOM from Gradle's resolved runtime classpath and scans it with osv-scanner. Gradle hooks use `./scripts/gradle-java27`.

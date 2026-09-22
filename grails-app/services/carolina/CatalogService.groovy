@@ -5,8 +5,13 @@ import com.zaxxer.hikari.HikariDataSource
 import groovy.sql.Sql
 import groovy.transform.CompileDynamic
 
-import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.sql.Connection
+import java.time.Duration
+import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
 
 @CompileDynamic
 class CatalogService {
@@ -42,11 +47,17 @@ class CatalogService {
     static final String TALK_COLS =
         'slug, title, description, format, youtube_id, year, speaker_slug, languages, topics'
 
+    // Two connections are enough for a 1 vCPU shared-cpu Fly machine and stay
+    // under the idle ceiling so startup does not open the whole pool.
+    static final int POOL_MAX = 2
+    static final int POOL_MIN_IDLE = 0
+
     static Closure queryFn
     static Closure connectFn
     static int sqlCount
     static int connectCount
     private static final Object COUNT_LOCK = new Object()
+    private static final AtomicBoolean REGISTRATION_STARTED = new AtomicBoolean(false)
     private static HikariDataSource pool
 
     static void resetCounts() {
@@ -54,6 +65,10 @@ class CatalogService {
             sqlCount = 0
             connectCount = 0
         }
+    }
+
+    static void resetRegistration() {
+        REGISTRATION_STARTED.set(false)
     }
 
     static Map identity() {
@@ -69,28 +84,49 @@ class CatalogService {
     }
 
     static void registerWithElixir() {
-        String url = System.getenv('CAROLINA_URL')
-        String token = System.getenv('POLYGLOT_REGISTER_TOKEN')
+        registerWithElixir(System.getenv('CAROLINA_URL'), System.getenv('POLYGLOT_REGISTER_TOKEN'))
+    }
+
+    // Returns as soon as the daemon thread is started. A stalled CMS must not
+    // add its connect/read timeout to the time until /health can be served.
+    static void registerWithElixir(String url, String token) {
         if (!url || !token) {
             return
         }
+        if (!REGISTRATION_STARTED.compareAndSet(false, true)) {
+            return
+        }
+        Thread worker = new Thread({ deliverRegistration(url, token) } as Runnable, 'elixir-register')
+        worker.daemon = true
+        worker.start()
+    }
+
+    static void deliverRegistration(String url, String token) {
         String port = System.getenv('PORT') ?: '4020'
         String base = System.getenv('PUBLIC_BASE_URL') ?: "http://127.0.0.1:${port}"
-        def body = new groovy.json.JsonBuilder(identity() + [base_url: base]).toString()
-        def post = new URL("${url.replaceAll(/\/$/, '')}/internal/api-endpoints/register")
-        try {
-            HttpURLConnection conn = (HttpURLConnection) post.openConnection()
-            conn.requestMethod = 'POST'
-            conn.doOutput = true
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
-            conn.setRequestProperty('Authorization', "Bearer ${token}")
-            conn.setRequestProperty('Content-Type', 'application/json')
-            conn.outputStream.withWriter('UTF-8') { it << body }
-            int status = conn.responseCode
-            System.err.println("registered with elixir: ${status}")
-        } catch (Exception e) {
-            System.err.println("register: ${e.message}")
+        String body = new groovy.json.JsonBuilder(identity() + [base_url: base]).toString()
+        String root = url.replaceAll(/\/$/, '')
+        Executor executor = { Runnable task ->
+            Thread io = new Thread(task, 'elixir-register-io')
+            io.daemon = true
+            io.start()
+        } as Executor
+        HttpClient client = HttpClient.newBuilder()
+            .executor(executor)
+            .connectTimeout(Duration.ofSeconds(5))
+            .build()
+        HttpRequest request = HttpRequest.newBuilder(URI.create("${root}/internal/api-endpoints/register"))
+            .timeout(Duration.ofSeconds(5))
+            .header('Authorization', "Bearer ${token}")
+            .header('Content-Type', 'application/json')
+            .POST(HttpRequest.BodyPublishers.ofString(body))
+            .build()
+        client.sendAsync(request, HttpResponse.BodyHandlers.discarding()).whenComplete { HttpResponse response, Throwable error ->
+            if (error != null) {
+                System.err.println("register: ${error.message}")
+            } else {
+                System.err.println("registered with elixir: ${response.statusCode()}")
+            }
         }
     }
 
@@ -200,19 +236,32 @@ class CatalogService {
         if (pool != null && !pool.closed) {
             return
         }
+        boolean created = false
         synchronized (POOL_LOCK) {
             if (pool != null && !pool.closed) {
                 return
             }
-            synchronized (COUNT_LOCK) { connectCount++ }
-            HikariConfig cfg = new HikariConfig()
-            cfg.jdbcUrl = jdbcUrl()
-            cfg.username = jdbcUser()
-            cfg.password = jdbcPassword()
-            cfg.maximumPoolSize = 8
-            cfg.poolName = 'carolina-grails-catalog'
-            pool = new HikariDataSource(cfg)
+            pool = new HikariDataSource(buildPoolConfig())
+            created = true
         }
+        if (created) {
+            synchronized (COUNT_LOCK) {
+                connectCount++
+            }
+        }
+    }
+
+    static HikariConfig buildPoolConfig() {
+        HikariConfig cfg = new HikariConfig()
+        cfg.jdbcUrl = jdbcUrl()
+        cfg.username = jdbcUser()
+        cfg.password = jdbcPassword()
+        cfg.maximumPoolSize = POOL_MAX
+        cfg.minimumIdle = POOL_MIN_IDLE
+        cfg.initializationFailTimeout = -1
+        cfg.connectionTimeout = 5000
+        cfg.poolName = 'carolina-grails-catalog'
+        cfg
     }
 
     private static String jdbcUrl() {
@@ -221,7 +270,6 @@ class CatalogService {
             return raw.contains('sslmode=') ? raw : raw + (raw.contains('?') ? '&' : '?') + 'sslmode=disable'
         }
         URI uri = URI.create(raw.replace('postgres://', 'http://').replace('postgresql://', 'http://'))
-        String userInfo = uri.userInfo ?: 'postgres:postgres'
         String host = uri.host ?: '127.0.0.1'
         int port = uri.port > 0 ? uri.port : 5432
         String db = uri.path?.replaceFirst('/', '') ?: 'carolina_dev'

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- Groovy's compiler emits instanceof checks SpotBugs cannot model
+         (BC_IMPOSSIBLE_INSTANCEOF on controller actions). Not a source bug. -->
+    <Match>
+        <Bug pattern="BC_IMPOSSIBLE_INSTANCEOF"/>
+    </Match>
+</FindBugsFilter>

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Run the Gradle wrapper with Java 27 (required by this Grails 7 app).
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+java27_home() {
+    if [ -n "${JAVA_HOME:-}" ] && [ -x "${JAVA_HOME}/bin/java" ]; then
+        if "${JAVA_HOME}/bin/java" -version 2>&1 | grep -Eq 'version "27([".]|$)'; then
+            printf '%s\n' "${JAVA_HOME}"
+            return 0
+        fi
+    fi
+    if command -v mise >/dev/null 2>&1; then
+        local home
+        home="$(mise where java@27.0.0 2>/dev/null || mise where java@27 2>/dev/null || true)"
+        if [ -n "${home}" ] && [ -x "${home}/bin/java" ]; then
+            printf '%s\n' "${home}"
+            return 0
+        fi
+    fi
+    echo "Java 27 is required. Set JAVA_HOME to a JDK 27 install (see README.md)." >&2
+    exit 1
+}
+
+JAVA_HOME="$(java27_home)"
+export JAVA_HOME
+export PATH="${JAVA_HOME}/bin:${PATH}"
+exec "${root}/gradlew" --no-daemon "$@"

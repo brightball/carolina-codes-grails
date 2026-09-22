@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Run gitleaks against this repo. Prefers PATH, then mise from this project.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+if command -v gitleaks >/dev/null 2>&1 && gitleaks version >/dev/null 2>&1; then
+    exec gitleaks detect --source . --verbose
+fi
+if command -v mise >/dev/null 2>&1; then
+    exec mise exec -- gitleaks detect --source . --verbose
+fi
+echo "gitleaks not found; install via mise (see README.md)" >&2
+exit 1

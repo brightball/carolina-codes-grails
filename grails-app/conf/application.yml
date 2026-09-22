@@ -13,15 +13,26 @@ grails:
   codegen:
     defaultPackage: carolina
   profile: rest-api
+spring:
+  jmx:
+    enabled: false
+  main:
+    banner-mode: "off"
+    lazy-initialization: true
 # GORM/Hibernate must not touch the shared catalog. H2 is Grails-only.
+# The in-app pool stays empty until a GORM call; /health does not make one.
 dataSource:
   pooled: true
-  jmxExport: true
+  jmxExport: false
   driverClassName: org.h2.Driver
   username: sa
   password: ''
   dbCreate: none
   url: jdbc:h2:mem:grails_not_catalog;LOCK_TIMEOUT=10000;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+  properties:
+    maximumPoolSize: 2
+    minimumIdle: 0
+    initializationFailTimeout: -1
 hibernate:
   hbm2ddl:
     auto: none
@@ -32,6 +43,11 @@ hibernate:
 server:
   port: ${PORT:4020}
   address: "::"
+  tomcat:
+    accept-count: 32
+    threads:
+      max: 8
+      min-spare: 1
 environments:
   development:
     dataSource:

@@ -16,6 +16,8 @@ plugins {
     id "war"
     id "idea"
     id "eclipse"
+    id "codenarc"
+    id "com.github.spotbugs" version "6.5.11"
 }
 
 // Not Published to Gradle Plugin Portal
@@ -23,6 +25,11 @@ apply plugin: "org.apache.grails.gradle.grails-web"
 apply plugin: "org.apache.grails.gradle.grails-gson"
 
 group = "carolina"
+
+// Override Grails/Spring BOM pins so OSV-known CVEs have patched versions.
+ext['tomcat.version'] = '10.1.60'
+ext['jackson-bom.version'] = '2.21.6'
+ext['jackson.version'] = '2.21.6'
 
 repositories {
     mavenCentral()
@@ -54,7 +61,7 @@ dependencies {
     implementation "org.springframework.boot:spring-boot-starter-validation"
     console "org.apache.grails:grails-console"
     implementation "com.zaxxer:HikariCP"
-    implementation "org.postgresql:postgresql"
+    implementation "org.postgresql:postgresql:42.7.13"
     runtimeOnly "com.h2database:h2"
     testImplementation "org.apache.grails:grails-testing-support-web"
     testImplementation "org.apache.grails:grails-testing-support-datamapping"
@@ -64,11 +71,196 @@ dependencies {
     testImplementation "org.testcontainers:postgresql"
     testImplementation "org.testcontainers:spock"
     testImplementation "org.testcontainers:testcontainers"
+
+    codenarc "org.codenarc:CodeNarc:3.7.0-groovy-4.0"
+    spotbugsPlugins "com.h3xstream.findsecbugs:findsecbugs-plugin:1.14.0"
 }
 
-compileJava.options.release = 21
+configurations.configureEach { conf ->
+    if (conf.canBeResolved) {
+        conf.resolutionStrategy.eachDependency { details ->
+            if (details.requested.group == "org.apache.tomcat.embed") {
+                details.useVersion("10.1.60")
+                details.because("OSV GHSA-9xv2-5v5q-p794 / GHSA-gcx9-497g-6cp6 / GHSA-h3x4-894j-xpx5")
+            }
+            if (details.requested.group == "com.fasterxml.jackson.core") {
+                details.useVersion("2.21.6")
+                details.because("OSV GHSA-5gvw-p9qm-jgwh / GHSA-5jmj-h7xm-6q6v / GHSA-mhm7-754m-9p8w")
+            }
+            if (details.requested.group == "org.postgresql" && details.requested.name == "postgresql") {
+                details.useVersion("42.7.13")
+                details.because("OSV GHSA-j92g-9f8w-j867")
+            }
+        }
+    }
+}
+
+java {
+    sourceCompatibility = '27'
+    targetCompatibility = '27'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 27
+}
+
+// Grails 7.2.3 assigns groovyOptions.configurationScript in doFirst. Gradle 9
+// finalizes that property, so drop the execution-time mutation.
+gradle.taskGraph.whenReady {
+    tasks.withType(org.gradle.api.tasks.compile.GroovyCompile).each { compileTask ->
+        compileTask.actions.removeIf { action ->
+            action.getClass().simpleName == 'ClosureTaskAction'
+        }
+    }
+}
 
 tasks.withType(Test).configureEach {
     useJUnitPlatform()
 }
+
+// Style: application Groovy only (not i18n properties or generated gson views).
+codenarc {
+    toolVersion = "3.7.0-groovy-4.0"
+    configFile = file("config/codenarc/codenarc.groovy")
+    ignoreFailures = false
+    maxPriority1Violations = 0
+    maxPriority2Violations = 0
+    maxPriority3Violations = 0
+    reportFormat = "html"
+}
+
+tasks.named("codenarcMain").configure {
+    dependsOn "classes"
+    compilationClasspath = files(sourceSets.main.compileClasspath, sourceSets.main.output)
+    exclude "**/i18n/**"
+    exclude "**/*.gson"
+    exclude "**/spring/resources.groovy"
+}
+
+tasks.named("codenarcTest").configure {
+    enabled = false
+}
+
+// SAST: SpotBugs + FindSecBugs on main bytecode. Fail closed.
+spotbugs {
+    ignoreFailures = false
+    showProgress = true
+    effort = "MAX"
+    reportLevel = "MEDIUM"
+    excludeFilter = file("config/spotbugs/exclude.xml")
+    includeFilter = file("config/spotbugs/include.xml")
+    maxHeapSize = "1g"
+}
+
+tasks.named("spotbugsTest").configure {
+    enabled = false
+}
+
+tasks.named("spotbugsMain").configure {
+    reports {
+        html.required = true
+        xml.required = true
+    }
+}
+
+// Third-party dependency vulnerabilities: CycloneDX BOM from Gradle's resolved
+// runtime classpath, scanned by Google OSV. Fail closed on findings or a missing scanner.
+tasks.register("writeDependencyBom") {
+    group = "verification"
+    description = "Write a CycloneDX SBOM of resolved runtime dependencies"
+    outputs.file(layout.buildDirectory.file("reports/bom.cdx.json"))
+    doLast {
+        def components = []
+        def seen = [] as Set
+        configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.each { art ->
+            def id = art.moduleVersion.id
+            def key = "${id.group}:${id.name}:${id.version}"
+            if (seen.add(key)) {
+                def purl = "pkg:maven/${id.group}/${id.name}@${id.version}"
+                components << [
+                    type       : "library",
+                    "bom-ref"  : purl,
+                    group      : id.group,
+                    name       : id.name,
+                    version    : id.version,
+                    purl       : purl
+                ]
+            }
+        }
+        if (components.isEmpty()) {
+            throw new GradleException("writeDependencyBom resolved 0 artifacts")
+        }
+        def bom = [
+            bomFormat   : "CycloneDX",
+            specVersion : "1.5",
+            version     : 1,
+            metadata    : [
+                component: [
+                    type    : "application",
+                    name    : project.name,
+                    version : project.version.toString()
+                ]
+            ],
+            components  : components
+        ]
+        def out = file("${layout.buildDirectory.get()}/reports/bom.cdx.json")
+        out.parentFile.mkdirs()
+        out.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(bom))
+        logger.lifecycle("Wrote ${components.size()} components to ${out}")
+    }
+}
+
+tasks.register("dependencyAudit") {
+    group = "verification"
+    description = "Scan resolved runtime dependencies against OSV (fail closed)"
+    dependsOn "writeDependencyBom"
+    doLast {
+        def bom = file("${layout.buildDirectory.get()}/reports/bom.cdx.json")
+        def osv = resolveOsvScanner()
+        def pb = new ProcessBuilder(osv, "scan", "source", "-L", bom.absolutePath, "--format", "table")
+        pb.redirectErrorStream(true)
+        pb.directory(project.projectDir)
+        def proc = pb.start()
+        def log = new StringBuilder()
+        proc.inputStream.eachLine { line ->
+            println line
+            log.append(line).append("\n")
+        }
+        def code = proc.waitFor()
+        def report = file("${layout.buildDirectory.get()}/reports/osv-scanner.txt")
+        report.parentFile.mkdirs()
+        report.text = log.toString()
+        if (code != 0) {
+            throw new GradleException("osv-scanner exited ${code} (vulnerabilities or scanner error)")
+        }
+    }
+}
+
+def resolveOsvScanner() {
+    def envPath = System.getenv("OSV_SCANNER")
+    if (envPath && new File(envPath).canExecute()) {
+        return envPath
+    }
+    def path = System.getenv("PATH") ?: ""
+    for (dir in path.split(File.pathSeparator)) {
+        def candidate = new File(dir, "osv-scanner")
+        if (candidate.canExecute()) {
+            return candidate.absolutePath
+        }
+    }
+    def miseRoot = new File(System.getProperty("user.home"), ".local/share/mise/installs/osv-scanner")
+    if (miseRoot.directory) {
+        def found = null
+        miseRoot.eachFileRecurse { f ->
+            if (found == null && f.name == "osv-scanner" && f.canExecute()) {
+                found = f
+            }
+        }
+        if (found != null) {
+            return found.absolutePath
+        }
+    }
+    throw new GradleException("osv-scanner not found on PATH; install via mise (see README.md)")
+}
+
 

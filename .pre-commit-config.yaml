@@ -1,0 +1,36 @@
+# Local pre-commit hooks. Emergency escape:
+#   SKIP=test,sast,audit,gitleaks,style git commit
+# Install once: pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: test
+        name: Gradle Spock tests
+        language: system
+        entry: ./scripts/gradle-java27 test
+        pass_filenames: false
+        always_run: true
+      - id: sast
+        name: SpotBugs FindSecBugs
+        language: system
+        entry: ./scripts/gradle-java27 spotbugsMain
+        pass_filenames: false
+        always_run: true
+      - id: audit
+        name: OSV dependency scanner
+        language: system
+        entry: ./scripts/gradle-java27 dependencyAudit
+        pass_filenames: false
+        always_run: true
+      - id: gitleaks
+        name: gitleaks
+        language: system
+        entry: ./scripts/gitleaks-detect
+        pass_filenames: false
+        always_run: true
+      - id: style
+        name: CodeNarc
+        language: system
+        entry: ./scripts/gradle-java27 codenarcMain
+        pass_filenames: false
+        always_run: true

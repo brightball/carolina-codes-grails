@@ -9,7 +9,4 @@ class BootStrap {
         }
         CatalogService.registerWithElixir()
     }
-
-    def destroy = {
-    }
 }
