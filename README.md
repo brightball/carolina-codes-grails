@@ -1,8 +1,18 @@
 # carolina-codes-grails
 
-Read-only v1 polyglot API for Carolina Code Conference. **Groovy** + **Grails 7.2.3** (latest stable) rest-api profile.
+Read-only v1 polyglot API for Carolina Code Conference. **Groovy 4.0.33** and **Grails 7.2.3** (rest-api profile) on **JDK 27**.
 
-Queries PostgreSQL `v1_*` views via JDBC/Hikari. GORM is pointed at in-memory H2 with `dbCreate: none` so Grails cannot alter the shared catalog.
+Groovy **4.0.33** is the `org.apache.groovy:groovy` version the Grails BOM resolves onto the runtime classpath. `GET /` reports that same value from `GroovySystem.version`. Grails **7.2.3** is `grailsVersion` in `gradle.properties`. JDK **27** is mise `java@27.0.0` (`JAVA_HOME` may point at that JDK). The Gradle wrapper is Gradle 9 (`gradle-9.8.0-rc-1`).
+
+Notable packages already in this build:
+
+- SpotBugs Gradle plugin 6.5.11 and FindSecBugs 1.14.0 (`spotbugsMain`)
+- CodeNarc 3.7.0-groovy-4.0 (`codenarcMain`)
+- A CycloneDX 1.5 BOM of the resolved runtime classpath, scanned with osv-scanner 2.6.0 (`dependencyAudit`)
+- gitleaks 8.30.1 (`gitleaks detect`)
+- HikariCP and the PostgreSQL JDBC driver 42.7.13 for catalog reads; H2 is on the runtime classpath only so GORM can stay off the CMS database
+
+Queries PostgreSQL `v1_*` views via JDBC/Hikari. GORM is pointed at in-memory H2 with `dbCreate: none` so Grails cannot alter the shared catalog. The decision log is `DECISIONS.md` (`MEMORY.md` indexes it).
 
 ```bash
 export JAVA_HOME="$(mise where java@27.0.0)"
